@@ -27,7 +27,14 @@ const EnvSchema = z.object({
   RAZORPAY_KEY_SECRET: z.string().optional(),
   RAZORPAY_WEBHOOK_SECRET: z.string().optional(),
   STORAGE_DIR: z.string().default('./storage'),
-  TRUST_PROXY: bool,
+  /** 'false', 'true' (one proxy) or the number of proxies in front of the API (e.g. 2 = Vercel + Render). */
+  TRUST_PROXY: z
+    .string()
+    .default('false')
+    .transform((v) => (v === 'true' ? 1 : v === 'false' ? 0 : Number(v)))
+    .pipe(z.number().int().min(0).max(5)),
+  /** Staging only: allow test OTP echo, console SMS and mock payments while running in production mode. Never set on the real launch. */
+  ALLOW_DEV_PROVIDERS: bool,
 });
 
 export type Env = z.infer<typeof EnvSchema>;
@@ -43,7 +50,10 @@ export function env(): Env {
     throw new Error(`Invalid environment configuration:\n  ${issues}`);
   }
   const e = parsed.data;
-  if (e.NODE_ENV === 'production') {
+  if (e.NODE_ENV === 'production' && e.ALLOW_DEV_PROVIDERS) {
+    console.warn('WARNING: ALLOW_DEV_PROVIDERS=true. Test OTPs and test payments are ON. Do not use with real users.');
+  }
+  if (e.NODE_ENV === 'production' && !e.ALLOW_DEV_PROVIDERS) {
     if (e.OTP_DEV_ECHO) throw new Error('OTP_DEV_ECHO must be false in production');
     if (e.SMS_PROVIDER === 'console') throw new Error('SMS_PROVIDER=console is not allowed in production');
     if (e.PAYMENT_PROVIDER === 'mock') throw new Error('PAYMENT_PROVIDER=mock is not allowed in production');
@@ -56,3 +66,5 @@ export function env(): Env {
 }
 
 export const isProd = () => env().NODE_ENV === 'production';
+/** True where test OTPs / mock payments are allowed (local development or an explicit staging server). */
+export const devProvidersAllowed = () => !isProd() || env().ALLOW_DEV_PROVIDERS;

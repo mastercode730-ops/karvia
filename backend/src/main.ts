@@ -13,7 +13,7 @@ export async function createApp() {
     rawBody: true, // needed to verify payment webhook signatures
     logger: e.NODE_ENV === 'test' ? ['error'] : ['log', 'warn', 'error'],
   });
-  if (e.TRUST_PROXY) app.set('trust proxy', 1);
+  if (e.TRUST_PROXY) app.set('trust proxy', e.TRUST_PROXY);
   app.disable('x-powered-by');
   app.setGlobalPrefix('api');
   app.use(

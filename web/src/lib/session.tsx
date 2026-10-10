@@ -7,6 +7,8 @@ import type { Socket } from 'socket.io-client';
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
 export const api = createApi(API_URL);
+/** Live updates connect straight to the backend (hosting proxies do not carry WebSockets). */
+export const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || (API_URL.startsWith('http') ? API_URL.replace(/\/api$/, '') : '');
 
 interface SessionCtx {
   user: SessionUser | null;
@@ -34,7 +36,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!user) return;
-    const s = connectRealtime(API_URL, () => api.token);
+    const s = connectRealtime(SOCKET_URL, () => api.token);
     setSocket(s);
     return () => {
       s.disconnect();

@@ -13,7 +13,7 @@ import { authenticator } from 'otplib';
 import { AuditService } from '../common/audit.service';
 import { AuthUser, STAFF_ROLES } from '../common/auth.types';
 import { addMinutes, decrypt, encrypt, hmac, randomToken, safeEqual, sha256 } from '../common/util';
-import { env, isProd } from '../config/env';
+import { devProvidersAllowed, env, isProd } from '../config/env';
 import { PrismaService } from '../prisma/prisma.service';
 import { SmsService } from '../sms/sms.service';
 
@@ -76,7 +76,7 @@ export class AuthService {
       }),
     ]);
     await this.sms.sendOtp(phone, code);
-    const echo = env().OTP_DEV_ECHO && !isProd();
+    const echo = env().OTP_DEV_ECHO && devProvidersAllowed();
     return { sent: true, resendAfterSec: OTP_RESEND_SEC, expiresInSec: OTP_TTL_MIN * 60, ...(echo ? { devCode: code } : {}) };
   }
 
