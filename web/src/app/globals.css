@@ -1,0 +1,22 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html { -webkit-text-size-adjust: 100%; }
+  body { @apply bg-white text-ink font-sans antialiased; }
+  h1, h2, h3 { @apply font-display leading-tight; text-wrap: balance; }
+  :focus-visible { outline: 2px solid #0B6E4F; outline-offset: 2px; }
+}
+
+@layer components {
+  .container-page { @apply mx-auto w-full max-w-page px-4 sm:px-6; }
+  .card { @apply rounded-2xl border border-line bg-white; }
+  .label { @apply text-sm font-semibold text-slate; }
+  .input { @apply w-full rounded-xl border border-line-strong bg-white px-3.5 py-3 text-base text-ink placeholder:text-muted/70 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20 disabled:bg-canvas disabled:text-muted; }
+  .eyebrow { @apply text-xs font-bold uppercase tracking-[0.08em] text-muted; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}

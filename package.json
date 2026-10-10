@@ -1,0 +1,22 @@
+{
+  "name": "karvia",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Karvia.services - local service marketplace (backend API, client/worker web app, admin console)",
+  "workspaces": [
+    "shared",
+    "backend",
+    "web",
+    "admin"
+  ],
+  "scripts": {
+    "dev:api": "npm run start:dev -w backend",
+    "dev:web": "npm run dev -w web",
+    "dev:admin": "npm run dev -w admin",
+    "build": "npm run build -w backend && npm run build -w web && npm run build -w admin",
+    "test": "npm test -w backend"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

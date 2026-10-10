@@ -1,0 +1,748 @@
+// Karvia database schema. Money is stored in paise (integers). Times are UTC.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ───────────────────────── Users, auth, staff ─────────────────────────
+
+enum Role {
+  CLIENT
+  WORKER
+  ADMIN
+  SUBADMIN
+  TELECALLER
+}
+
+enum UserStatus {
+  ACTIVE
+  WARNED
+  SUSPENDED
+  BLOCKED
+}
+
+model User {
+  id               String     @id @default(cuid())
+  phone            String     @unique
+  name             String?
+  email            String?
+  roles            Role[]
+  status           UserStatus @default(ACTIVE)
+  statusReason     String?
+  language         String     @default("en")
+  termsAcceptedAt  DateTime?
+  marketingConsent Boolean    @default(false)
+  staffRoleId      String?
+  staffRole        StaffRole? @relation(fields: [staffRoleId], references: [id])
+  totpSecret       String?
+  totpEnabled      Boolean    @default(false)
+  lastLoginAt      DateTime?
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+
+  client        ClientProfile?
+  worker        WorkerProfile?
+  addresses     Address[]
+  sessions      Session[]
+  subscriptions Subscription[]
+  payments      Payment[]
+  notifications Notification[]
+  files         FileObject[]
+
+  @@index([createdAt])
+}
+
+model StaffRole {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  permissions String[]
+  createdAt   DateTime @default(now())
+  users       User[]
+}
+
+model OtpCode {
+  id         String    @id @default(cuid())
+  phone      String
+  codeHash   String
+  ip         String?
+  attempts   Int       @default(0)
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([phone, createdAt])
+  @@index([ip, createdAt])
+}
+
+model Session {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshHash String    @unique
+  activeRole  Role
+  userAgent   String?
+  ip          String?
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  replacedBy  String?
+  createdAt   DateTime  @default(now())
+
+  @@index([userId])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  actorRole  String?
+  action     String
+  entityType String
+  entityId   String?
+  before     Json?
+  after      Json?
+  reason     String?
+  ip         String?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([actorId])
+  @@index([createdAt])
+}
+
+model Setting {
+  key       String   @id
+  value     Json
+  updatedBy String?
+  updatedAt DateTime @updatedAt
+}
+
+// ───────────────────────── Profiles & locations ─────────────────────────
+
+model ClientProfile {
+  userId    String   @id
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  area      String?
+  pincode   String?
+  lat       Float?
+  lng       Float?
+  createdAt DateTime @default(now())
+}
+
+model Address {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  label     String
+  line      String
+  area      String?
+  pincode   String?
+  lat       Float
+  lng       Float
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+enum Availability {
+  AVAILABLE
+  BUSY
+}
+
+enum VerificationStatus {
+  INCOMPLETE
+  PENDING
+  UNDER_REVIEW
+  VERIFIED
+  REJECTED
+  SUSPENDED
+}
+
+model WorkerProfile {
+  userId             String             @id
+  user               User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  photoFileId        String?
+  workPhotoIds       String[]
+  experienceYears    Int?
+  bio                String?
+  languages          String[]
+  skills             String[]
+  certifications     String[]
+  area               String?
+  pincode            String?
+  lat                Float?
+  lng                Float?
+  advanceBooking     Boolean            @default(true)
+  minNoticeMin       Int                @default(120)
+  maxAdvanceDays     Int                @default(15)
+  availability       Availability       @default(BUSY)
+  verificationStatus VerificationStatus @default(INCOMPLETE)
+  rejectReason       String?
+  verifiedAt         DateTime?
+  submittedAt        DateTime?
+  expectedSalary     String?
+  preferredLocation  String?
+  joining            String?
+  ratingAvg          Float              @default(0)
+  ratingCount        Int                @default(0)
+  jobsDone           Int                @default(0)
+  warnings           Int                @default(0)
+  trialUsed          Boolean            @default(false)
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  services    WorkerService[]
+  rates       WorkerRate[]
+  employment  EmploymentHistory[]
+  blockedDays BlockedDate[]
+
+  @@index([verificationStatus, availability])
+  @@index([lat, lng])
+}
+
+model WorkerService {
+  workerId  String
+  worker    WorkerProfile @relation(fields: [workerId], references: [userId], onDelete: Cascade)
+  serviceId String
+  service   Service       @relation(fields: [serviceId], references: [id])
+
+  @@id([workerId, serviceId])
+  @@index([serviceId])
+}
+
+enum PricingModel {
+  PER_HOUR
+  PER_VISIT
+  PER_DAY
+  PER_JOB
+  PER_KM
+  PER_PERSON
+  PER_ITEM
+  PACKAGE
+  CUSTOM_QUOTE
+}
+
+model WorkerRate {
+  id          String        @id @default(cuid())
+  workerId    String
+  worker      WorkerProfile @relation(fields: [workerId], references: [userId], onDelete: Cascade)
+  serviceId   String?
+  label       String
+  model       PricingModel
+  amountPaise Int?
+  sortOrder   Int           @default(0)
+  createdAt   DateTime      @default(now())
+
+  @@index([workerId])
+}
+
+model EmploymentHistory {
+  id               String        @id @default(cuid())
+  workerId         String
+  worker           WorkerProfile @relation(fields: [workerId], references: [userId], onDelete: Cascade)
+  company          String
+  title            String
+  startDate        String?
+  endDate          String?
+  responsibilities String?
+  createdAt        DateTime      @default(now())
+}
+
+model BlockedDate {
+  id       String        @id @default(cuid())
+  workerId String
+  worker   WorkerProfile @relation(fields: [workerId], references: [userId], onDelete: Cascade)
+  date     DateTime      @db.Date
+
+  @@unique([workerId, date])
+}
+
+// ───────────────────────── Catalogue ─────────────────────────
+
+enum BookingType {
+  INSTANT
+  SCHEDULED
+  QUOTE
+}
+
+enum DocType {
+  AADHAAR
+  PAN
+  ADDRESS_PROOF
+  POLICE_VERIFICATION
+  DRIVING_LICENCE
+  SKILL_CERTIFICATE
+  RESUME
+  OTHER
+}
+
+model Category {
+  id            String        @id @default(cuid())
+  name          String
+  nameHi        String?
+  slug          String        @unique
+  active        Boolean       @default(true)
+  sortOrder     Int           @default(0)
+  subCategories SubCategory[]
+}
+
+model SubCategory {
+  id         String    @id @default(cuid())
+  categoryId String
+  category   Category  @relation(fields: [categoryId], references: [id])
+  name       String
+  nameHi     String?
+  slug       String    @unique
+  active     Boolean   @default(true)
+  sortOrder  Int       @default(0)
+  services   Service[]
+}
+
+model Service {
+  id               String         @id @default(cuid())
+  subCategoryId    String
+  subCategory      SubCategory    @relation(fields: [subCategoryId], references: [id])
+  name             String
+  nameHi           String?
+  slug             String         @unique
+  active           Boolean        @default(true)
+  sortOrder        Int            @default(0)
+  bookingTypes     BookingType[]
+  pricingModels    PricingModel[]
+  durationMin      Int            @default(60)
+  minNoticeMin     Int            @default(120)
+  maxAdvanceDays   Int            @default(15)
+  freeCancelMin    Int            @default(60)
+  requiredDocs     DocType[]
+  needsWorkHistory Boolean        @default(false)
+
+  workers  WorkerService[]
+  requests ServiceRequest[]
+}
+
+// ───────────────────────── Files & documents ─────────────────────────
+
+enum FileKind {
+  PROFILE_PHOTO
+  WORK_PHOTO
+  DOCUMENT
+  REQUEST_MEDIA
+  EVIDENCE
+}
+
+model FileObject {
+  id        String   @id @default(cuid())
+  ownerId   String
+  owner     User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  kind      FileKind
+  key       String   @unique
+  mime      String
+  size      Int
+  name      String?
+  createdAt DateTime @default(now())
+
+  document Document?
+}
+
+enum DocStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+model Document {
+  id           String     @id @default(cuid())
+  workerId     String
+  type         DocType
+  fileId       String     @unique
+  file         FileObject @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  status       DocStatus  @default(PENDING)
+  rejectReason String?
+  reviewedBy   String?
+  reviewedAt   DateTime?
+  createdAt    DateTime   @default(now())
+
+  @@index([workerId])
+}
+
+// ───────────────────────── Plans & payments ─────────────────────────
+
+enum SubscriptionKind {
+  CLIENT_ACCESS
+  WORKER_TRIAL
+  WORKER_PLAN
+}
+
+enum SubscriptionSource {
+  PAYMENT
+  TRIAL
+  ADMIN
+}
+
+model Subscription {
+  id        String             @id @default(cuid())
+  userId    String
+  user      User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind      SubscriptionKind
+  source    SubscriptionSource
+  startsAt  DateTime
+  endsAt    DateTime
+  paymentId String?            @unique
+  note      String?
+  createdAt DateTime           @default(now())
+
+  @@index([userId, kind, endsAt])
+}
+
+enum PaymentPurpose {
+  CLIENT_ACCESS
+  WORKER_PLAN
+}
+
+enum PaymentStatus {
+  CREATED
+  PENDING
+  SUCCESS
+  FAILED
+  REFUNDED
+}
+
+model Payment {
+  id                String         @id @default(cuid())
+  userId            String
+  user              User           @relation(fields: [userId], references: [id])
+  purpose           PaymentPurpose
+  amountPaise       Int
+  taxPaise          Int            @default(0)
+  totalPaise        Int
+  provider          String
+  providerOrderId   String         @unique
+  providerPaymentId String?
+  status            PaymentStatus  @default(CREATED)
+  failureReason     String?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([status])
+}
+
+model WebhookEvent {
+  id         String   @id
+  provider   String
+  type       String
+  receivedAt DateTime @default(now())
+}
+
+// ───────────────────────── Requests, matching, quotes ─────────────────────────
+
+enum RequestStatus {
+  SEARCHING
+  SENT
+  QUOTING
+  ACCEPTED
+  NO_WORKER
+  CANCELLED
+  EXPIRED
+}
+
+model ServiceRequest {
+  id               String        @id @default(cuid())
+  number           Int           @unique @default(autoincrement())
+  clientId         String
+  serviceId        String
+  service          Service       @relation(fields: [serviceId], references: [id])
+  bookingType      BookingType
+  description      String
+  mediaFileIds     String[]
+  quantity         Int           @default(1)
+  scheduledAt      DateTime?
+  lat              Float
+  lng              Float
+  addressText      String
+  targetWorkerId   String?
+  status           RequestStatus @default(SEARCHING)
+  radiusKm         Int
+  round            Int           @default(0)
+  roundExpiresAt   DateTime?
+  acceptedWorkerId String?
+  cancelReason     String?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  offers   RequestOffer[]
+  quotes   Quote[]
+  bookings Booking[]
+  history  StatusHistory[]
+
+  @@index([clientId, createdAt])
+  @@index([status, roundExpiresAt])
+}
+
+enum OfferResponse {
+  PENDING
+  ACCEPTED
+  REJECTED
+  EXPIRED
+  CLOSED
+}
+
+model RequestOffer {
+  id          String         @id @default(cuid())
+  requestId   String
+  request     ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  workerId    String
+  round       Int
+  distanceKm  Float
+  expiresAt   DateTime
+  response    OfferResponse  @default(PENDING)
+  respondedAt DateTime?
+  createdAt   DateTime       @default(now())
+
+  @@unique([requestId, workerId])
+  @@index([workerId, response])
+}
+
+enum QuoteStatus {
+  ACTIVE
+  WITHDRAWN
+  SUPERSEDED
+  ACCEPTED
+  REJECTED
+}
+
+model Quote {
+  id            String         @id @default(cuid())
+  requestId     String
+  request       ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  workerId      String
+  version       Int            @default(1)
+  servicePaise  Int
+  materialPaise Int            @default(0)
+  taxPaise      Int            @default(0)
+  note          String?
+  status        QuoteStatus    @default(ACTIVE)
+  expiresAt     DateTime
+  createdAt     DateTime       @default(now())
+
+  @@index([requestId, status])
+}
+
+// ───────────────────────── Bookings ─────────────────────────
+
+enum BookingStatus {
+  ACCEPTED
+  CONFIRMED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  DISPUTED
+}
+
+model Booking {
+  id           String         @id @default(cuid())
+  number       Int            @unique @default(autoincrement())
+  requestId    String
+  request      ServiceRequest @relation(fields: [requestId], references: [id])
+  clientId     String
+  workerId     String
+  serviceId    String
+  bookingType  BookingType
+  scheduledAt  DateTime?
+  agreedPrice  Json
+  status       BookingStatus  @default(ACCEPTED)
+  cancelledBy  String?
+  cancelReason String?
+  lateCancel   Boolean        @default(false)
+  confirmedAt  DateTime?
+  startedAt    DateTime?
+  completedAt  DateTime?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  charges BookingCharge[]
+  reviews Review[]
+  history StatusHistory[]
+
+  @@index([clientId, createdAt])
+  @@index([workerId, status])
+  @@index([requestId])
+}
+
+model BookingCharge {
+  id          String    @id @default(cuid())
+  bookingId   String
+  booking     Booking   @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  label       String
+  kind        String
+  amountPaise Int
+  approvedAt  DateTime?
+  rejectedAt  DateTime?
+  createdAt   DateTime  @default(now())
+}
+
+model StatusHistory {
+  id        String          @id @default(cuid())
+  requestId String?
+  request   ServiceRequest? @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  bookingId String?
+  booking   Booking?        @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  from      String?
+  to        String
+  actorId   String?
+  note      String?
+  createdAt DateTime        @default(now())
+
+  @@index([requestId])
+  @@index([bookingId])
+}
+
+enum ReviewDirection {
+  CLIENT_TO_WORKER
+  WORKER_TO_CLIENT
+}
+
+model Review {
+  id        String          @id @default(cuid())
+  bookingId String
+  booking   Booking         @relation(fields: [bookingId], references: [id])
+  authorId  String
+  targetId  String
+  direction ReviewDirection
+  stars     Int
+  text      String?
+  hidden    Boolean         @default(false)
+  createdAt DateTime        @default(now())
+
+  @@unique([bookingId, direction])
+  @@index([targetId])
+}
+
+enum FavouriteKind {
+  FAVOURITE
+  FOLLOW
+}
+
+model Favourite {
+  clientId  String
+  workerId  String
+  kind      FavouriteKind
+  createdAt DateTime      @default(now())
+
+  @@id([clientId, workerId, kind])
+}
+
+// ───────────────────────── Complaints, notifications, leads ─────────────────────────
+
+enum ComplaintStatus {
+  OPEN
+  UNDER_REVIEW
+  RESOLVED
+}
+
+model Complaint {
+  id              String          @id @default(cuid())
+  number          Int             @unique @default(autoincrement())
+  reporterId      String
+  reporterRole    Role
+  againstId       String?
+  bookingId       String?
+  reason          String
+  amountPaise     Int?
+  paidVia         String?
+  description     String
+  evidenceFileIds String[]
+  priority        String          @default("MEDIUM")
+  status          ComplaintStatus @default(OPEN)
+  resolution      String?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  notes ComplaintNote[]
+
+  @@index([status, createdAt])
+  @@index([reporterId])
+}
+
+model ComplaintNote {
+  id          String    @id @default(cuid())
+  complaintId String
+  complaint   Complaint @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  authorId    String
+  text        String
+  createdAt   DateTime  @default(now())
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String
+  category  String    @default("TRANSACTIONAL")
+  title     String
+  body      String
+  link      String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, createdAt])
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  INTERESTED
+  REGISTRATION_PENDING
+  PAYMENT_PENDING
+  READY_FOR_VERIFICATION
+  FOLLOW_UP
+  CONVERTED
+  NOT_INTERESTED
+}
+
+enum LeadSource {
+  INCOMPLETE_REGISTRATION
+  CATEGORY_INTEREST
+  TRIAL_ENDING
+  EXPIRED_WORKER
+  UNPAID_WORKER
+  VOICE_REGISTRATION
+  WEBSITE
+  REFERRAL
+}
+
+model Lead {
+  id           String         @id @default(cuid())
+  workerId     String?        @unique
+  name         String?
+  phone        String
+  category     String?
+  area         String?
+  source       LeadSource
+  status       LeadStatus     @default(NEW)
+  assignedToId String?
+  followUpAt   DateTime?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  activities   LeadActivity[]
+
+  @@index([assignedToId, status])
+  @@index([status, createdAt])
+}
+
+model LeadActivity {
+  id        String   @id @default(cuid())
+  leadId    String
+  lead      Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  actorId   String?
+  kind      String
+  note      String?
+  createdAt DateTime @default(now())
+
+  @@index([leadId, createdAt])
+}
