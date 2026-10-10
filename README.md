@@ -81,7 +81,7 @@ telecaller data scoping, audit logging, and signed file links.
 1. **Database in India:** move from Neon Singapore to a Mumbai-region Postgres (e.g. AWS RDS `ap-south-1`) for DPDP data residency.
 2. **Secrets:** generate new `JWT_SECRET`, `OTP_PEPPER`, `FILE_URL_SECRET`, `DATA_KEY` for production; keep them in the host's secret manager.
 3. **SMS:** register DLT templates, set `SMS_PROVIDER=msg91`, `MSG91_AUTH_KEY`, `MSG91_TEMPLATE_ID`.
-4. **Payments:** set `PAYMENT_PROVIDER=razorpay`, keys, and the webhook secret; point the Razorpay webhook to `https://<api>/api/payments/webhook/razorpay` (events: `payment.captured`, `payment.failed`, `order.paid`).
+4. **Payments:** set `PAYMENT_PROVIDER=razorpay`, keys, and the webhook secret; point the Razorpay webhook to `https://<api>/api/payments/webhook/razorpay` (events: `payment.captured`, `payment.failed`, `order.paid`). Payments are double-checked with Razorpay's API (order, amount, captured) before access is granted, and admin refunds go through Razorpay.
 5. **Maps (optional):** `GOOGLE_MAPS_API_KEY` for address search (GPS works without it).
 6. **File storage:** for more than one API server, swap the local disk storage in `backend/src/files/files.service.ts` for S3 (Mumbai) with the same interface.
 7. **Hosting:** API on a Node host behind HTTPS (`TRUST_PROXY=true`, `NODE_ENV=production`); web + admin on Vercel with

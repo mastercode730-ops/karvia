@@ -41,7 +41,10 @@ export class PaymentsService {
     const q = await this.quote(purpose);
     const provider = env().PAYMENT_PROVIDER;
     const receipt = `krv_${randomToken(9)}`;
-    const providerOrderId = provider === 'razorpay' ? await this.razorpayOrder(q.totalPaise, receipt, purpose) : `mock_order_${randomToken(12)}`;
+    const providerOrderId =
+      provider === 'razorpay'
+        ? (await this.rzp<{ id: string }>('POST', '/orders', { amount: q.totalPaise, currency: 'INR', receipt, notes: { purpose, userId: me.id } }, 'Payment could not be started. Please try again.')).id
+        : `mock_order_${randomToken(12)}`;
 
     const p = await this.prisma.payment.create({
       data: { userId: me.id, purpose, amountPaise: q.amountPaise, taxPaise: q.taxPaise, totalPaise: q.totalPaise, provider, providerOrderId, status: 'CREATED' },
@@ -49,21 +52,24 @@ export class PaymentsService {
     return { paymentId: p.id, orderId: providerOrderId, provider, keyId: provider === 'razorpay' ? env().RAZORPAY_KEY_ID : null, ...q };
   }
 
-  private async razorpayOrder(amount: number, receipt: string, purpose: string) {
+  /** Calls the Razorpay REST API with the server-side key. The key secret never leaves the server. */
+  private async rzp<T>(method: 'GET' | 'POST', path: string, body: unknown, userMessage: string): Promise<T> {
     const e = env();
-    const res = await fetch('https://api.razorpay.com/v1/orders', {
-      method: 'POST',
+    const res = await fetch(`https://api.razorpay.com/v1${path}`, {
+      method,
       headers: {
         'content-type': 'application/json',
         authorization: 'Basic ' + Buffer.from(`${e.RAZORPAY_KEY_ID}:${e.RAZORPAY_KEY_SECRET}`).toString('base64'),
       },
-      body: JSON.stringify({ amount, currency: 'INR', receipt, notes: { purpose } }),
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(15000),
     });
+    const json: any = await res.json().catch(() => ({}));
     if (!res.ok) {
-      this.log.error(`Razorpay order failed: ${res.status}`);
-      throw new BadRequestException('Payment could not be started. Please try again.');
+      this.log.error(`Razorpay ${method} ${path.split('/').slice(0, 2).join('/')} failed: ${res.status} ${json?.error?.code ?? ''}`);
+      throw new BadRequestException(userMessage);
     }
-    return ((await res.json()) as { id: string }).id;
+    return json as T;
   }
 
   /** Marks the payment successful and grants the subscription exactly once, whatever path confirms it first. */
@@ -129,21 +135,49 @@ export class PaymentsService {
       return { ok: true, duplicate: true };
     }
     const pay = event.payload?.payment?.entity;
-    if ((event.event === 'payment.captured' || event.event === 'order.paid') && pay?.order_id) {
+    const known = pay?.order_id ? await this.prisma.payment.findUnique({ where: { providerOrderId: pay.order_id } }) : null;
+    if ((event.event === 'payment.captured' || event.event === 'order.paid') && known) {
+      if (pay.currency && pay.currency !== 'INR') return { ok: true, ignored: 'currency' };
       await this.markCaptured(pay.order_id, pay.id, pay.amount);
-    } else if (event.event === 'payment.failed' && pay?.order_id) {
+    } else if (event.event === 'payment.failed' && known) {
       await this.markFailed(pay.order_id, pay.error_description ?? 'failed');
+    } else if (event.event === 'refund.processed') {
+      const refund = event.payload?.refund?.entity;
+      if (refund?.payment_id) {
+        await this.prisma.payment.updateMany({ where: { providerPaymentId: refund.payment_id, status: 'SUCCESS' }, data: { status: 'REFUNDED' } });
+      }
     }
     return { ok: true };
   }
 
-  /** Checkout callback: verify Razorpay's signature server-side (order_id|payment_id). */
+  /**
+   * Checkout callback. Three checks before any access is granted:
+   * 1. Razorpay's signature over order_id|payment_id is valid (proves the browser did not invent it).
+   * 2. Razorpay's own API confirms this payment belongs to this order, for the exact amount, in INR.
+   * 3. The payment is captured; if it is only authorised, the server captures it now.
+   */
   async verifyCheckout(me: AuthUser, orderId: string, paymentId: string, signature: string) {
+    if (env().PAYMENT_PROVIDER !== 'razorpay') throw new BadRequestException('Online payments are not enabled');
     const p = await this.prisma.payment.findUnique({ where: { providerOrderId: orderId } });
     if (!p || p.userId !== me.id) throw new NotFoundException('Payment not found');
+    if (p.status === 'SUCCESS') return p;
     const expected = hmac(env().RAZORPAY_KEY_SECRET ?? '', `${orderId}|${paymentId}`);
     if (!safeEqual(signature, expected)) throw new BadRequestException('Payment could not be verified');
-    return this.markCaptured(orderId, paymentId);
+
+    const failMsg = 'We could not confirm this payment yet. If money was deducted, access unlocks as soon as the bank confirms.';
+    let rp = await this.rzp<{ id: string; order_id: string; amount: number; currency: string; status: string }>('GET', `/payments/${encodeURIComponent(paymentId)}`, undefined, failMsg);
+    if (rp.order_id !== orderId || rp.amount !== p.totalPaise || rp.currency !== 'INR') {
+      this.log.error(`Payment ${paymentId} does not match order ${orderId}`);
+      throw new BadRequestException('Payment details do not match this order');
+    }
+    if (rp.status === 'authorized') {
+      rp = await this.rzp('POST', `/payments/${encodeURIComponent(paymentId)}/capture`, { amount: p.totalPaise, currency: 'INR' }, failMsg);
+    }
+    if (rp.status !== 'captured') {
+      await this.prisma.payment.update({ where: { id: p.id }, data: { status: 'PENDING', providerPaymentId: paymentId } });
+      throw new BadRequestException(failMsg);
+    }
+    return this.markCaptured(orderId, paymentId, rp.amount);
   }
 
   /** Development only: simulates the provider confirming or failing a payment. */
@@ -172,8 +206,14 @@ export class PaymentsService {
     const p = await this.prisma.payment.findUnique({ where: { id: paymentId } });
     if (!p) throw new NotFoundException('Payment not found');
     if (p.status !== 'SUCCESS') throw new BadRequestException('Only successful payments can be refunded');
+    // Real Razorpay payments are refunded through Razorpay; test/mock payments are only marked.
+    let refundId: string | null = null;
+    if (p.provider === 'razorpay' && p.providerPaymentId) {
+      const r = await this.rzp<{ id: string }>('POST', `/payments/${encodeURIComponent(p.providerPaymentId)}/refund`, { amount: p.totalPaise, notes: { reason: reason.slice(0, 200) } }, 'Razorpay could not process the refund. Try again or refund from the Razorpay dashboard.');
+      refundId = r.id;
+    }
     const updated = await this.prisma.payment.update({ where: { id: p.id }, data: { status: 'REFUNDED', failureReason: reason } });
-    await this.audit.log(actor, { action: 'payment.refund', entityType: 'Payment', entityId: p.id, before: { status: p.status }, after: { status: 'REFUNDED' }, reason, ip });
+    await this.audit.log(actor, { action: 'payment.refund', entityType: 'Payment', entityId: p.id, before: { status: p.status }, after: { status: 'REFUNDED', refundId }, reason, ip });
     return updated;
   }
 }

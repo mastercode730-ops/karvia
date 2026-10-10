@@ -1,6 +1,7 @@
 /* End-to-end tests against a real (test) Postgres database: business rules and security boundaries. */
 import './load-env';
 import { INestApplication } from '@nestjs/common';
+import { createHmac } from 'crypto';
 import { authenticator } from 'otplib';
 import request from 'supertest';
 import { createApp } from '../src/main';
@@ -156,6 +157,23 @@ describe('₹9 access gate & payments', () => {
     const profile = await request(http).get(`/api/workers/${w.id}`).set(auth(c.token)).expect(200);
     expect(profile.body.phone).toBeUndefined();
     expect(profile.body.lat).toBeUndefined();
+  });
+
+  it('accepts a correctly signed Razorpay webhook once, and rejects wrong amounts', async () => {
+    const { accessToken: t, user } = await login('9822200009', 'CLIENT', 'Webhook Client');
+    const order = await request(http).post('/api/payments/orders').set(auth(t)).send({ purpose: 'CLIENT_ACCESS' }).expect(201);
+    const send = (eventId: string, amount: number) => {
+      const body = JSON.stringify({ event: 'payment.captured', payload: { payment: { entity: { id: 'pay_test_' + eventId, order_id: order.body.orderId, amount, currency: 'INR' } } } });
+      const sig = createHmac('sha256', 'test_webhook_secret_for_e2e_only').update(body).digest('hex');
+      return request(http).post('/api/payments/webhook/razorpay').set('Content-Type', 'application/json').set('x-razorpay-signature', sig).set('x-razorpay-event-id', eventId).send(body);
+    };
+    await send('evt_wrong_amount', 100).expect(400);
+    const order2 = await request(http).post('/api/payments/orders').set(auth(t)).send({ purpose: 'CLIENT_ACCESS' }).expect(201);
+    order.body.orderId = order2.body.orderId;
+    await send('evt_ok', 900).expect(200);
+    const dup = await send('evt_ok', 900).expect(200);
+    expect(dup.body.duplicate).toBe(true);
+    expect(await prisma.subscription.count({ where: { userId: user.id, kind: 'CLIENT_ACCESS' } })).toBe(1);
   });
 
   it('rejects forged payment webhooks', async () => {
